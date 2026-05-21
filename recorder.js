@@ -13133,9 +13133,26 @@ var SessionReplayRecorder = (() => {
           keepalive: body.length < 6e4,
           body
         });
+        if (response.status === 409) {
+          await this.handleSequenceConflict(response, payload.sequence, events);
+          return;
+        }
         if (!response.ok) throw new Error(`Flush failed: ${response.status}`);
         this.advanceSequence();
       } catch {
+        this.buffer.unshift(...events);
+      }
+    }
+    async handleSequenceConflict(response, sentSequence, events) {
+      const conflict = await response.json().catch(() => null);
+      const expected = typeof conflict?.expected === "number" && Number.isInteger(conflict.expected) ? conflict.expected : void 0;
+      if (expected === void 0) {
+        this.buffer.unshift(...events);
+        return;
+      }
+      this.sequence = Math.max(0, expected);
+      this.writeStoredSession();
+      if (expected <= sentSequence) {
         this.buffer.unshift(...events);
       }
     }
