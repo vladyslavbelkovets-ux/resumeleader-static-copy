@@ -12819,6 +12819,7 @@ var SessionReplayRecorder = (() => {
 
   // ../shared/dist/types.js
   var AI_SNAPSHOT_PLUGIN = "session-replay/ai-snapshot@1";
+  var LIFECYCLE_PLUGIN = "session-replay/lifecycle@1";
 
   // src/aiSnapshot.ts
   function buildSanitizedDomSnapshot(documentRef, options) {
@@ -12847,6 +12848,7 @@ var SessionReplayRecorder = (() => {
       observer(callback, win) {
         let timeout;
         const emit = () => {
+          if (!isRecordableDocument(win.document)) return;
           win.clearTimeout(timeout);
           timeout = win.setTimeout(() => {
             callback(buildSanitizedDomSnapshot(win.document, options));
@@ -12876,6 +12878,9 @@ var SessionReplayRecorder = (() => {
         };
       }
     };
+  }
+  function isRecordableDocument(documentRef) {
+    return documentRef.location.protocol === "http:" || documentRef.location.protocol === "https:";
   }
   function maskNode(node2) {
     node2.textContent = "[masked]";
@@ -13140,7 +13145,7 @@ var SessionReplayRecorder = (() => {
         type: 6,
         timestamp: Date.now(),
         data: {
-          plugin: "session-replay/lifecycle@1",
+          plugin: LIFECYCLE_PLUGIN,
           payload: {
             state,
             url: window.location.href
