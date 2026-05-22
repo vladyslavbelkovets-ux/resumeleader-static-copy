@@ -13039,6 +13039,58 @@ var SessionReplayRecorder = (() => {
     return () => observer.disconnect();
   }
 
+  // src/scrollFallback.ts
+  var DOCUMENT_NODE_ID = 1;
+  var INCREMENTAL_SNAPSHOT_EVENT = 3;
+  var SCROLL_SOURCE = 3;
+  function createWindowScrollEvent(source, timestamp = Date.now()) {
+    const visualViewport = source.visualViewport;
+    const x2 = normalizeNumber(visualViewport?.pageLeft ?? source.scrollX ?? source.pageXOffset ?? visualViewport?.offsetLeft ?? 0);
+    const y = normalizeNumber(visualViewport?.pageTop ?? source.scrollY ?? source.pageYOffset ?? visualViewport?.offsetTop ?? 0);
+    return {
+      type: INCREMENTAL_SNAPSHOT_EVENT,
+      timestamp,
+      data: {
+        source: SCROLL_SOURCE,
+        id: DOCUMENT_NODE_ID,
+        x: x2,
+        y
+      }
+    };
+  }
+  function installWindowScrollFallback(emit, win = window, throttleMs = 120) {
+    let last = getPosition(win);
+    let timeout;
+    const flush = () => {
+      timeout = void 0;
+      const next = getPosition(win);
+      if (next.x === last.x && next.y === last.y) return;
+      last = next;
+      emit(createWindowScrollEvent(win));
+    };
+    const schedule = () => {
+      if (timeout !== void 0) return;
+      timeout = win.setTimeout(flush, throttleMs);
+    };
+    win.addEventListener("scroll", schedule, { passive: true, capture: true });
+    win.visualViewport?.addEventListener?.("scroll", schedule, { passive: true });
+    win.visualViewport?.addEventListener?.("resize", schedule, { passive: true });
+    return () => {
+      if (timeout !== void 0) win.clearTimeout(timeout);
+      win.removeEventListener("scroll", schedule, { capture: true });
+      win.visualViewport?.removeEventListener?.("scroll", schedule);
+      win.visualViewport?.removeEventListener?.("resize", schedule);
+    };
+  }
+  function getPosition(source) {
+    const event = createWindowScrollEvent(source);
+    const data = event.data;
+    return { x: data.x, y: data.y };
+  }
+  function normalizeNumber(value) {
+    return Number.isFinite(value) ? value : 0;
+  }
+
   // src/transport.ts
   var EventTransport = class {
     constructor(config, context) {
@@ -13328,11 +13380,13 @@ var SessionReplayRecorder = (() => {
     const stopNetwork = installNetworkObserver((payload) => {
       record.addCustomEvent("session-replay/network@1", payload);
     }, window, config.ingestBaseUrl);
+    const stopScrollFallback = installWindowScrollFallback((event) => transport.add(event), window);
     const heartbeatTimer = window.setInterval(() => {
       transport.addLifecycleEvent("heartbeat");
     }, 15e3);
     installLiveApi(config, transport, () => {
       window.clearInterval(heartbeatTimer);
+      stopScrollFallback();
       stopNetwork();
       stopRecord?.();
       void transport.end();
