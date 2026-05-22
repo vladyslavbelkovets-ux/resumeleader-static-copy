@@ -13107,9 +13107,10 @@ var SessionReplayRecorder = (() => {
     async flushNow(useBeacon = false) {
       if (!this.session || !this.buffer.length) return;
       const events = this.buffer.splice(0, this.buffer.length);
+      const sequence = this.allocateSequence();
       const payload = {
         token: this.session.token,
-        sequence: this.sequence,
+        sequence,
         sentAt: (/* @__PURE__ */ new Date()).toISOString(),
         events
       };
@@ -13118,7 +13119,6 @@ var SessionReplayRecorder = (() => {
       if (useBeacon && navigator.sendBeacon) {
         const sent = navigator.sendBeacon(url, new Blob([body], { type: "application/json" }));
         if (sent) {
-          this.advanceSequence();
           return;
         }
       }
@@ -13134,27 +13134,26 @@ var SessionReplayRecorder = (() => {
           body
         });
         if (response.status === 409) {
-          await this.handleSequenceConflict(response, payload.sequence, events);
+          await this.handleSequenceConflict(response, events);
           return;
         }
         if (!response.ok) throw new Error(`Flush failed: ${response.status}`);
-        this.advanceSequence();
       } catch {
         this.buffer.unshift(...events);
       }
     }
-    async handleSequenceConflict(response, sentSequence, events) {
+    async handleSequenceConflict(response, events) {
       const conflict = await response.json().catch(() => null);
       const expected = typeof conflict?.expected === "number" && Number.isInteger(conflict.expected) ? conflict.expected : void 0;
       if (expected === void 0) {
         this.buffer.unshift(...events);
         return;
       }
-      this.sequence = Math.max(0, expected);
+      this.sequence = Math.max(this.sequence, expected);
+      this.ensureSharedSequenceAtLeast(this.sequence);
       this.writeStoredSession();
-      if (expected <= sentSequence) {
-        this.buffer.unshift(...events);
-      }
+      this.buffer.unshift(...events);
+      window.setTimeout(() => void this.flush(), 0);
     }
     addLifecycleEvent(state) {
       if (this.stopped && state !== "end") return;
@@ -13202,9 +13201,40 @@ var SessionReplayRecorder = (() => {
       }).catch(() => void 0);
       this.clearStoredSession();
     }
-    advanceSequence() {
-      this.sequence += 1;
+    allocateSequence() {
+      const sharedNext = this.readSharedNextSequence();
+      const sequence = Math.max(this.sequence, sharedNext ?? 0);
+      this.sequence = sequence + 1;
+      this.ensureSharedSequenceAtLeast(this.sequence);
       this.writeStoredSession();
+      return sequence;
+    }
+    readSharedNextSequence() {
+      const key = this.sequenceStorageKey();
+      if (!key) return void 0;
+      try {
+        const raw = window.localStorage.getItem(key);
+        if (!raw) return void 0;
+        const value = Number(raw);
+        return Number.isInteger(value) && value >= 0 ? value : void 0;
+      } catch {
+        return void 0;
+      }
+    }
+    ensureSharedSequenceAtLeast(nextSequence) {
+      const key = this.sequenceStorageKey();
+      if (!key) return;
+      try {
+        const current = this.readSharedNextSequence();
+        if (current === void 0 || current < nextSequence) {
+          window.localStorage.setItem(key, String(nextSequence));
+        }
+      } catch {
+      }
+    }
+    sequenceStorageKey() {
+      if (!this.session) return null;
+      return `session-replay:${this.config.siteId}:${this.session.sessionId}:next-sequence`;
     }
     readStoredSession() {
       try {
