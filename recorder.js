@@ -13103,6 +13103,7 @@ var SessionReplayRecorder = (() => {
       __publicField(this, "stopped", false);
       __publicField(this, "storageKey");
       __publicField(this, "flushing", null);
+      __publicField(this, "lastDocumentScroll", null);
       this.storageKey = `session-replay:${config.siteId}:session`;
     }
     async init() {
@@ -13139,10 +13140,19 @@ var SessionReplayRecorder = (() => {
     }
     add(event) {
       if (this.stopped) return;
+      if (this.isDuplicateDocumentScroll(event)) return;
       this.buffer.push(event);
       if (this.buffer.length >= 100 || JSON.stringify(this.buffer).length >= 128e3) {
         void this.flush();
       }
+    }
+    isDuplicateDocumentScroll(event) {
+      if (event.type !== 3) return false;
+      const data = event.data;
+      if (!data || data.source !== 3 || data.id !== 1 || typeof data.x !== "number" || typeof data.y !== "number") return false;
+      const last = this.lastDocumentScroll;
+      this.lastDocumentScroll = { x: data.x, y: data.y, timestamp: event.timestamp };
+      return Boolean(last && last.x === data.x && last.y === data.y && Math.abs(event.timestamp - last.timestamp) <= 250);
     }
     async flush(useBeacon = false) {
       if (this.flushing) {
